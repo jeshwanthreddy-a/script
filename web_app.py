@@ -299,7 +299,6 @@ with gr.Blocks(title="VoiceToTally ERP Suite") as demo:
     export_btn.click(fn=save_and_export_xml, inputs=[xml_box], outputs=[status_box, export_file_download])
     import_btn.click(fn=handle_csv_import, inputs=[csv_file_input, master_selector], outputs=[sync_status, master_dataframe_view])
     csv_export_btn.click(fn=handle_csv_export, inputs=[master_selector], outputs=[sync_status, csv_export_download])
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     demo.launch(server_name="0.0.0.0", server_port=port)
