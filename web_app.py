@@ -7,7 +7,7 @@ import numpy as np
 import scipy.io.wavfile as wavfile
 from datetime import datetime
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 LEDGER_CSV = "business_ledgers.csv"
 INVENTORY_CSV = "business_inventory.csv"
 COMPANY_STATE = "Local State"
