@@ -1,9 +1,25 @@
 import os
+from fastapi import FastAPI
+from groq import Groq
+
+app = FastAPI()
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+# Example replacement inside your parse route:
+# Instead of: ollama.chat(model='llama3', ...)
+# Use:
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {"role": "system", "content": "You are a Tally ERP accounting parser..."},
+        {"role": "user", "content": user_narration}
+    ]
+)
+parsed_output = response.choices[0].message.content
 import json
 from datetime import datetime
 import difflib
 import pandas as pd
-import ollama
 from celery import Celery
 from faster_whisper import WhisperModel
 from database import save_audit_entry, update_audit_entry
