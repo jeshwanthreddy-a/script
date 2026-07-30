@@ -40,20 +40,22 @@ from datetime import datetime
 import difflib
 import pandas as pd
 from celery import Celery
-from database import save_audit_entry, update_audit_entry
 
 BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_engine = Celery("voicetotally_workers", broker=BROKER_URL, backend=BROKER_URL)
+BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 INVENTORY_CSV = "business_inventory.csv"
 LEDGER_CSV = "business_ledgers.csv"
 stt_pipeline = None
 
-def get_stt_model():
-    global stt_pipeline
-    if stt_pipeline is None:
-        stt_pipeline = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
-    return stt_pipeline
+# Transcribe audio using Groq Cloud API
+with open(audio_file_path, "rb") as file:
+    transcription = client.audio.transcriptions.create(
+        file=(audio_file_path, file.read()),
+        model="whisper-large-v3",
+        prompt="Specify context here if needed"
+    )
+transcript_text = transcription.text
 
 def fuzzy_match_ledger(extracted_name):
     if not os.path.exists(LEDGER_CSV): return {"match": None, "suggested": False}
