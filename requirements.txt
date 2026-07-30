@@ -1,7 +1,9 @@
+fastapi
+uvicorn
 gradio
 requests
 pandas
 numpy
 scipy
-uvicorn
-fastapi
+groq
+python-multipart
