@@ -1,4 +1,11 @@
 import os
+import os
+import subprocess
+
+# Launch worker.py as the backend FastAPI engine
+subprocess.Popen(["uvicorn", "worker:app", "--host", "127.0.0.1", "--port", "8000"])
+
+API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
 import gradio as gr
 import requests
 import time
