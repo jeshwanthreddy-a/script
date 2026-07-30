@@ -1,27 +1,45 @@
 import os
-from fastapi import FastAPI
+import json
+from fastapi import FastAPI, Body
 from groq import Groq
 
 app = FastAPI()
+
+# Initialize Groq client using the environment variable
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# Example replacement inside your parse route:
-# Instead of: ollama.chat(model='llama3', ...)
-# Use:
-response = client.chat.completions.create(
-    model="llama-3.3-70b-versatile",
-    messages=[
-        {"role": "system", "content": "You are a Tally ERP accounting parser..."},
-        {"role": "user", "content": user_narration}
-    ]
-)
-parsed_output = response.choices[0].message.content
-import json
+@app.get("/")
+def read_root():
+    return {"status": "Backend Engine Running"}
+
+@app.post("/v2/statement/parse")
+def parse_statement(payload: dict = Body(...)):
+    # Grab the text narration sent from Gradio
+    narration = payload.get("narration", "")
+    
+    if not narration:
+        return {"error": "No narration provided"}
+
+    # Call Groq inside the route handler
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system", 
+                "content": "You are a Tally ERP accounting assistant. Extract party_name, voucher_type, and amount from the user text and return valid JSON."
+            },
+            {
+                "role": "user", 
+                "content": narration
+            }
+        ]
+    )
+
+    return {"result": response.choices[0].message.content}
 from datetime import datetime
 import difflib
 import pandas as pd
 from celery import Celery
-from faster_whisper import WhisperModel
 from database import save_audit_entry, update_audit_entry
 
 BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
