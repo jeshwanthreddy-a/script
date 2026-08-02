@@ -19,42 +19,65 @@ INVENTORY_CSV = "business_inventory.csv"
 COMPANY_STATE = "Local State"
 
 def load_csv_data(file_path, default_cols):
+    """Safely load CSV, ensuring required columns always exist."""
     if os.path.exists(file_path):
         try:
-            return pd.read_csv(file_path)
-        except:
+            df = pd.read_csv(file_path)
+            for col in default_cols:
+                if col not in df.columns:
+                    df[col] = ""
+            return df
+        except Exception:
             pass
-    return pd.DataFrame(columns=default_cols)
+    
+    # Create empty DataFrame with required default columns
+    df = pd.DataFrame(columns=default_cols)
+    if file_path == LEDGER_CSV:
+        df = pd.DataFrame([
+            {"Party Account Name": "Alpha Corp", "Region State": "Local State", "Classification Type": "Sundry Debtors"},
+            {"Party Account Name": "Beta Traders", "Region State": "Maharashtra", "Classification Type": "Sundry Creditors"}
+        ])
+        df.to_csv(LEDGER_CSV, index=False)
+    elif file_path == INVENTORY_CSV:
+        df = pd.DataFrame([
+            {"SKU": "SKU-001", "Item_Name": "Mouse", "HSN_Code": "HSN-8471", "Gst_Rate": "18%"},
+            {"SKU": "SKU-002", "Item_Name": "Keyboard", "HSN_Code": "HSN-8471", "Gst_Rate": "18%"}
+        ])
+        df.to_csv(INVENTORY_CSV, index=False)
+    return df
 
 def get_party_info(party_name):
     df = load_csv_data(LEDGER_CSV, ["Party Account Name", "Region State", "Classification Type"])
-    match = df[df["Party Account Name"].str.lower() == party_name.lower()]
-    if not match.empty:
-        return match.iloc[0]["Region State"]
+    if "Party Account Name" in df.columns and not df.empty:
+        match = df[df["Party Account Name"].astype(str).str.lower() == str(party_name).lower()]
+        if not match.empty:
+            return match.iloc[0].get("Region State", COMPANY_STATE)
     return COMPANY_STATE
 
 def get_item_tax_info(item_name):
     df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate"])
-    match = df[df["Item_Name"].str.lower() == item_name.lower()]
-    if not match.empty:
-        hsn = match.iloc[0]["HSN_Code"]
-        raw_rate = str(match.iloc[0]["Gst_Rate"]).replace("%", "").strip()
-        try:
-            rate = float(raw_rate) / 100.0
-        except:
-            rate = 0.18
-        return hsn, rate
+    if "Item_Name" in df.columns and not df.empty:
+        match = df[df["Item_Name"].astype(str).str.lower() == str(item_name).lower()]
+        if not match.empty:
+            hsn = match.iloc[0].get("HSN_Code", "HSN-8504")
+            raw_rate = str(match.iloc[0].get("Gst_Rate", "18%")).replace("%", "").strip()
+            try:
+                rate = float(raw_rate) / 100.0
+            except Exception:
+                rate = 0.18
+            return hsn, rate
     return "HSN-8504", 0.18
 
 def transcribe_audio_file(audio_path):
     """Transcribe audio using direct worker logic or Groq Whisper API directly."""
     if DIRECT_WORKER:
         try:
-            return transcribe_audio_logic(audio_path)
+            res = transcribe_audio_logic(audio_path)
+            if res:
+                return res
         except Exception:
             pass
 
-    # Direct Groq Whisper API Call if GROQ_API_KEY is available
     if GROQ_API_KEY and audio_path and os.path.exists(audio_path):
         try:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
@@ -78,27 +101,24 @@ def process_voice_pipeline(audio_path, text_overwrite):
         if transcribed_text:
             narration = transcribed_text
 
-    # Priority 2: Use manual text input if provided (overrides or acts as fallback)
+    # Priority 2: Use manual text input if provided
     if text_overwrite and text_overwrite.strip():
-        # Only overwrite if narration is empty OR user typed something custom
-        if not narration or text_overwrite.strip() != "sold 1 mouse to alpha":
+        if not narration:
             narration = text_overwrite.strip()
 
     if not narration:
         return "⚠️ Please provide a clear voice recording or text narration.", "", "", gr.update(visible=False), "", "", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
 
-    # Process statement via direct worker logic or smart rule-based parser
     try:
         if DIRECT_WORKER:
             result = parse_statement_logic(narration)
         else:
-            # Smart Rule Engine for parsing dictated transcript
             words = narration.lower()
             party_detected = "Alpha Corp"
-            if "alpha" in words:
-                party_detected = "Alpha Corp"
-            elif "beta" in words:
+            if "beta" in words:
                 party_detected = "Beta Traders"
+            elif "alpha" in words:
+                party_detected = "Alpha Corp"
             
             item_detected = "Mouse"
             if "keyboard" in words:
@@ -110,7 +130,7 @@ def process_voice_pipeline(audio_path, text_overwrite):
                 "status": "SUCCESS",
                 "transcript": narration,
                 "party_name": party_detected,
-                "voucher_type": "Sales" if "sold" in words or "sale" in words else "Purchase",
+                "voucher_type": "Sales" if any(w in words for w in ["sold", "sale", "sales"]) else "Purchase",
                 "items": [{"Item": item_detected, "Qty": 1}],
                 "total_value": 500.0,
                 "date": datetime.now().strftime("%Y%m%d")
@@ -134,7 +154,7 @@ def process_voice_pipeline(audio_path, text_overwrite):
 
         hsn_code, tax_pct = get_item_tax_info(item_name)
         party_state = get_party_info(party)
-        is_interstate = (party_state.lower() != COMPANY_STATE.lower()) and (party_state.lower() != "local state")
+        is_interstate = (str(party_state).lower() != COMPANY_STATE.lower()) and (str(party_state).lower() != "local state")
 
         if is_interstate:
             igst_val = sub_total * tax_pct
