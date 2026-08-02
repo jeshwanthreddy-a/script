@@ -39,12 +39,9 @@ def parse_statement(payload: dict = Body(...)):
 from datetime import datetime
 import difflib
 import pandas as pd
-from celery import Celery
 # Comment these out if you aren't using an active Redis server:
 # from celery import Celery
 # celery_engine = Celery(...)
-BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 INVENTORY_CSV = "business_inventory.csv"
 LEDGER_CSV = "business_ledgers.csv"
