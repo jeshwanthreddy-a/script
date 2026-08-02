@@ -2,7 +2,7 @@ import os
 import json
 import difflib
 from datetime import datetime
-from fastapi import FastAPI, Body, File, UploadFile
+from fastapi import FastAPI, Request, File, UploadFile
 import pandas as pd
 from groq import Groq
 
@@ -90,8 +90,20 @@ def generate_tally_xml(voucher_type, party_name, items, assessable_value, cgst, 
     return xml
 
 @app.post("/v2/statement/parse")
-def parse_statement(payload: dict = Body(...)):
-    narration = payload.get("narration", "").strip()
+async def parse_statement(request: Request):
+    payload = {}
+    content_type = request.headers.get("content-type", "")
+
+    # Flexibly parse incoming request whether JSON or Form Data
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        form = await request.form()
+        payload = dict(form)
+
+    narration = payload.get("text_narration") or payload.get("narration") or ""
+    narration = str(narration).strip()
+
     if not narration:
         return {"status": "FAILED", "error": "No narration provided"}
 
