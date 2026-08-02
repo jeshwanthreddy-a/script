@@ -82,26 +82,12 @@ def get_item_tax_info(item_name):
     return "HSN-8504", 0.18, 0.0
 
 def extract_dynamic_entities(transcript):
-    """Dynamic regex & string analyzer to extract Party, Item, Qty, and Price from free text."""
+    """Dynamic regex & string analyzer to extract Party, Item, Qty, and Price/Rate from free text."""
     text = transcript.lower()
     
-    # 1. Extract Price / Total Value
-    # Matches patterns like: "rs.20", "rs 20", "20 rupees", "for 200", "rupees 500", "cost 50"
-    price_patterns = [
-        r'(?:rs\.?|rupees|inr)\s*(\d+(?:\.\d+)?)',
-        r'(\d+(?:\.\d+)?)\s*(?:rupees|rs)',
-        r'(?:for|amount|cost|worth|at)\s+(?:rs\.?|rupees)?\s*(\d+(?:\.\d+)?)'
-    ]
-    extracted_price = None
-    for pattern in price_patterns:
-        match = re.search(pattern, text)
-        if match:
-            extracted_price = float(match.group(1))
-            break
-
-    # 2. Extract Quantity
+    # 1. Extract Quantity
     qty = 1
-    qty_pattern = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:nos|pcs|pieces|units|items|mouse|keyboards|monitors)?'
+    qty_pattern = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:nos|pcs|pieces|units|items|mouse|keyboards|monitors)?'
     qty_match = re.search(qty_pattern, text)
     if qty_match:
         val = qty_match.group(1)
@@ -109,6 +95,22 @@ def extract_dynamic_entities(transcript):
             qty = int(val)
         elif val in NUMBER_WORDS:
             qty = NUMBER_WORDS[val]
+
+    # 2. Extract Price or Rate
+    is_per_unit = any(term in text for term in ["each", "per", "a piece", "per unit", "rate of", "rate", "@"])
+
+    price_patterns = [
+        r'(?:rs\.?|rupees|inr)\s*(\d+(?:\.\d+)?)',
+        r'(\d+(?:\.\d+)?)\s*(?:rupees|rs)',
+        r'(?:for|amount|cost|worth|at|rate of)\s+(?:rs\.?|rupees)?\s*(\d+(?:\.\d+)?)'
+    ]
+    
+    extracted_val = None
+    for pattern in price_patterns:
+        match = re.search(pattern, text)
+        if match:
+            extracted_val = float(match.group(1))
+            break
 
     # 3. Dynamic Party Detection against LEDGER_CSV
     ledger_df = load_csv_data(LEDGER_CSV, ["Party Account Name", "Region State", "Classification Type"])
@@ -118,7 +120,6 @@ def extract_dynamic_entities(transcript):
             detected_party = str(name)
             break
             
-    # Fallback party detection if not in CSV yet
     if detected_party == "Cash":
         if "alpha" in text:
             detected_party = "Alpha Corp"
@@ -133,7 +134,6 @@ def extract_dynamic_entities(transcript):
             detected_item = str(item)
             break
             
-    # Fallback item detection
     if detected_item == "General Goods":
         if "mouse" in text:
             detected_item = "Mouse"
@@ -142,11 +142,14 @@ def extract_dynamic_entities(transcript):
         elif "monitor" in text:
             detected_item = "Monitor"
 
-    # 5. Determine Final Value
+    # 5. Calculate Final Subtotal Value
     hsn, tax_rate, master_unit_price = get_item_tax_info(detected_item)
     
-    if extracted_price is not None:
-        final_total_value = extracted_price
+    if extracted_val is not None:
+        if is_per_unit:
+            final_total_value = qty * extracted_val
+        else:
+            final_total_value = extracted_val
     elif master_unit_price > 0:
         final_total_value = qty * master_unit_price
     else:
