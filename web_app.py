@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests
 import pandas as pd
@@ -18,6 +19,12 @@ LEDGER_CSV = "business_ledgers.csv"
 INVENTORY_CSV = "business_inventory.csv"
 COMPANY_STATE = "Local State"
 
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "a": 1, "an": 1, "single": 1
+}
+
 def load_csv_data(file_path, default_cols):
     """Safely load CSV, ensuring required columns always exist."""
     if os.path.exists(file_path):
@@ -30,7 +37,7 @@ def load_csv_data(file_path, default_cols):
         except Exception:
             pass
     
-    # Create empty DataFrame with required default columns
+    # Auto-seed initial structure if missing
     df = pd.DataFrame(columns=default_cols)
     if file_path == LEDGER_CSV:
         df = pd.DataFrame([
@@ -40,8 +47,8 @@ def load_csv_data(file_path, default_cols):
         df.to_csv(LEDGER_CSV, index=False)
     elif file_path == INVENTORY_CSV:
         df = pd.DataFrame([
-            {"SKU": "SKU-001", "Item_Name": "Mouse", "HSN_Code": "HSN-8471", "Gst_Rate": "18%"},
-            {"SKU": "SKU-002", "Item_Name": "Keyboard", "HSN_Code": "HSN-8471", "Gst_Rate": "18%"}
+            {"SKU": "SKU-001", "Item_Name": "Mouse", "HSN_Code": "HSN-8471", "Gst_Rate": "18%", "Unit_Price": 250.0},
+            {"SKU": "SKU-002", "Item_Name": "Keyboard", "HSN_Code": "HSN-8471", "Gst_Rate": "18%", "Unit_Price": 500.0}
         ])
         df.to_csv(INVENTORY_CSV, index=False)
     return df
@@ -55,7 +62,7 @@ def get_party_info(party_name):
     return COMPANY_STATE
 
 def get_item_tax_info(item_name):
-    df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate"])
+    df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate", "Unit_Price"])
     if "Item_Name" in df.columns and not df.empty:
         match = df[df["Item_Name"].astype(str).str.lower() == str(item_name).lower()]
         if not match.empty:
@@ -65,8 +72,97 @@ def get_item_tax_info(item_name):
                 rate = float(raw_rate) / 100.0
             except Exception:
                 rate = 0.18
-            return hsn, rate
-    return "HSN-8504", 0.18
+            
+            try:
+                unit_price = float(match.iloc[0].get("Unit_Price", 0.0))
+            except Exception:
+                unit_price = 0.0
+                
+            return hsn, rate, unit_price
+    return "HSN-8504", 0.18, 0.0
+
+def extract_dynamic_entities(transcript):
+    """Dynamic regex & string analyzer to extract Party, Item, Qty, and Price from free text."""
+    text = transcript.lower()
+    
+    # 1. Extract Price / Total Value
+    # Matches patterns like: "rs.20", "rs 20", "20 rupees", "for 200", "rupees 500", "cost 50"
+    price_patterns = [
+        r'(?:rs\.?|rupees|inr)\s*(\d+(?:\.\d+)?)',
+        r'(\d+(?:\.\d+)?)\s*(?:rupees|rs)',
+        r'(?:for|amount|cost|worth|at)\s+(?:rs\.?|rupees)?\s*(\d+(?:\.\d+)?)'
+    ]
+    extracted_price = None
+    for pattern in price_patterns:
+        match = re.search(pattern, text)
+        if match:
+            extracted_price = float(match.group(1))
+            break
+
+    # 2. Extract Quantity
+    qty = 1
+    qty_pattern = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:nos|pcs|pieces|units|items|mouse|keyboards|monitors)?'
+    qty_match = re.search(qty_pattern, text)
+    if qty_match:
+        val = qty_match.group(1)
+        if val.isdigit():
+            qty = int(val)
+        elif val in NUMBER_WORDS:
+            qty = NUMBER_WORDS[val]
+
+    # 3. Dynamic Party Detection against LEDGER_CSV
+    ledger_df = load_csv_data(LEDGER_CSV, ["Party Account Name", "Region State", "Classification Type"])
+    detected_party = "Cash"
+    for name in ledger_df["Party Account Name"].dropna().unique():
+        if str(name).lower() in text:
+            detected_party = str(name)
+            break
+            
+    # Fallback party detection if not in CSV yet
+    if detected_party == "Cash":
+        if "alpha" in text:
+            detected_party = "Alpha Corp"
+        elif "beta" in text:
+            detected_party = "Beta Traders"
+
+    # 4. Dynamic Item Detection against INVENTORY_CSV
+    inv_df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate", "Unit_Price"])
+    detected_item = "General Goods"
+    for item in inv_df["Item_Name"].dropna().unique():
+        if str(item).lower() in text:
+            detected_item = str(item)
+            break
+            
+    # Fallback item detection
+    if detected_item == "General Goods":
+        if "mouse" in text:
+            detected_item = "Mouse"
+        elif "keyboard" in text:
+            detected_item = "Keyboard"
+        elif "monitor" in text:
+            detected_item = "Monitor"
+
+    # 5. Determine Final Value
+    hsn, tax_rate, master_unit_price = get_item_tax_info(detected_item)
+    
+    if extracted_price is not None:
+        final_total_value = extracted_price
+    elif master_unit_price > 0:
+        final_total_value = qty * master_unit_price
+    else:
+        final_total_value = 0.0
+
+    voucher_type = "Sales" if any(w in text for w in ["sold", "sale", "sales", "invoice"]) else "Purchase"
+
+    return {
+        "status": "SUCCESS",
+        "transcript": transcript,
+        "party_name": detected_party,
+        "voucher_type": voucher_type,
+        "items": [{"Item": detected_item, "Qty": qty}],
+        "total_value": final_total_value,
+        "date": datetime.now().strftime("%Y%m%d")
+    }
 
 def transcribe_audio_file(audio_path):
     """Transcribe audio using direct worker logic or Groq Whisper API directly."""
@@ -113,28 +209,7 @@ def process_voice_pipeline(audio_path, text_overwrite):
         if DIRECT_WORKER:
             result = parse_statement_logic(narration)
         else:
-            words = narration.lower()
-            party_detected = "Alpha Corp"
-            if "beta" in words:
-                party_detected = "Beta Traders"
-            elif "alpha" in words:
-                party_detected = "Alpha Corp"
-            
-            item_detected = "Mouse"
-            if "keyboard" in words:
-                item_detected = "Keyboard"
-            elif "monitor" in words:
-                item_detected = "Monitor"
-
-            result = {
-                "status": "SUCCESS",
-                "transcript": narration,
-                "party_name": party_detected,
-                "voucher_type": "Sales" if any(w in words for w in ["sold", "sale", "sales"]) else "Purchase",
-                "items": [{"Item": item_detected, "Qty": 1}],
-                "total_value": 500.0,
-                "date": datetime.now().strftime("%Y%m%d")
-            }
+            result = extract_dynamic_entities(narration)
 
         status = result.get("status", "SUCCESS")
         
@@ -146,13 +221,13 @@ def process_voice_pipeline(audio_path, text_overwrite):
             missing = result.get("missing_keyword", "Unknown Item")
             return f"⚠️ ALERT: Item '{missing}' missing!", result.get("transcript", narration), "", gr.update(visible=True), missing, "Inventory Item", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
 
-        party = result.get("party_name", "Alpha Corp")
+        party = result.get("party_name", "Cash")
         v_type = result.get("voucher_type", "Sales")
         items = result.get("items", [])
-        item_name = items[0]["Item"] if items else "General Item"
-        sub_total = float(result.get("total_value", 500.0))
+        item_name = items[0]["Item"] if items else "General Goods"
+        sub_total = float(result.get("total_value", 0.0))
 
-        hsn_code, tax_pct = get_item_tax_info(item_name)
+        hsn_code, tax_pct, _ = get_item_tax_info(item_name)
         party_state = get_party_info(party)
         is_interstate = (str(party_state).lower() != COMPANY_STATE.lower()) and (str(party_state).lower() != "local state")
 
@@ -270,8 +345,8 @@ def save_and_export_xml(xml_content):
 def quick_forge_master(entity_name, group_type):
     try:
         if group_type == "Inventory Item":
-            df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate"])
-            df = pd.concat([df, pd.DataFrame([{"SKU": f"SKU-{int(time.time())}", "Item_Name": entity_name, "HSN_Code": "HSN-8504", "Gst_Rate": "18%"}])], ignore_index=True)
+            df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate", "Unit_Price"])
+            df = pd.concat([df, pd.DataFrame([{"SKU": f"SKU-{int(time.time())}", "Item_Name": entity_name, "HSN_Code": "HSN-8504", "Gst_Rate": "18%", "Unit_Price": 0.0}])], ignore_index=True)
             df.to_csv(INVENTORY_CSV, index=False)
         else:
             df = load_csv_data(LEDGER_CSV, ["Party Account Name", "Region State", "Classification Type"])
