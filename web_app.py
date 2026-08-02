@@ -42,7 +42,7 @@ def parse_text_narration(text_input):
         return f"❌ Network/Server Error: {str(e)}", text_input, "", "", "", "", "", ""
 
 # Build Gradio Interface
-with gr.Blocks(title="VoiceToTally Real-Time Dashboard", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="VoiceToTally Real-Time Dashboard") as demo:
     gr.Markdown("# 🎙️ VoiceToTally Multilingual Real-Time Dashboard")
     gr.Markdown("🔒 **Secure Voice Processing Pipeline**")
     
@@ -71,7 +71,7 @@ with gr.Blocks(title="VoiceToTally Real-Time Dashboard", theme=gr.themes.Soft())
             total_output = gr.Textbox(label="Grand Total Val")
             
             gr.Markdown("### 🛠️ Verified Tally Structural XML Script Output")
-            xml_output = gr.Code(label="Tally XML Payload Stream", language="xml")
+            xml_output = gr.Code(label="Tally XML Payload Stream")
 
     submit_btn.click(
         fn=parse_text_narration,
@@ -89,4 +89,4 @@ with gr.Blocks(title="VoiceToTally Real-Time Dashboard", theme=gr.themes.Soft())
     )
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=10000)
+    demo.launch(server_name="0.0.0.0", server_port=10000, theme=gr.themes.Soft())
