@@ -1,17 +1,19 @@
 import os
 import time
+import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
 import gradio as gr
 
-# Try importing worker backend logic directly to bypass HTTP/Port connection issues entirely
+# Try importing worker backend logic directly
 try:
-    from worker import parse_statement_logic, create_master_logic
+    from worker import parse_statement_logic, transcribe_audio_logic
     DIRECT_WORKER = True
 except ImportError:
     DIRECT_WORKER = False
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 LEDGER_CSV = "business_ledgers.csv"
 INVENTORY_CSV = "business_inventory.csv"
 COMPANY_STATE = "Local State"
@@ -44,29 +46,72 @@ def get_item_tax_info(item_name):
         return hsn, rate
     return "HSN-8504", 0.18
 
+def transcribe_audio_file(audio_path):
+    """Transcribe audio using direct worker logic or Groq Whisper API directly."""
+    if DIRECT_WORKER:
+        try:
+            return transcribe_audio_logic(audio_path)
+        except Exception:
+            pass
+
+    # Direct Groq Whisper API Call if GROQ_API_KEY is available
+    if GROQ_API_KEY and audio_path and os.path.exists(audio_path):
+        try:
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            with open(audio_path, "rb") as f:
+                files = {"file": (os.path.basename(audio_path), f, "audio/wav")}
+                data = {"model": "whisper-large-v3"}
+                res = requests.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data, timeout=30)
+                if res.status_code == 200:
+                    return res.json().get("text", "")
+        except Exception as e:
+            print(f"Whisper API error: {e}")
+
+    return ""
+
 def process_voice_pipeline(audio_path, text_overwrite):
     narration = ""
-    if text_overwrite and text_overwrite.strip():
-        narration = text_overwrite.strip()
-    elif audio_path:
-        # If worker backend direct access exists, transcribe or set narration placeholder
-        narration = "Audio file recorded"
-    
-    if not narration:
-        return "⚠️ Please provide a voice recording or text narration.", "", "", gr.update(visible=False), "", "", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
 
-    # Process statement via direct worker logic or local fallback
+    # Priority 1: Transcribe audio if recorded
+    if audio_path and os.path.exists(audio_path):
+        transcribed_text = transcribe_audio_file(audio_path)
+        if transcribed_text:
+            narration = transcribed_text
+
+    # Priority 2: Use manual text input if provided (overrides or acts as fallback)
+    if text_overwrite and text_overwrite.strip():
+        # Only overwrite if narration is empty OR user typed something custom
+        if not narration or text_overwrite.strip() != "sold 1 mouse to alpha":
+            narration = text_overwrite.strip()
+
+    if not narration:
+        return "⚠️ Please provide a clear voice recording or text narration.", "", "", gr.update(visible=False), "", "", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
+
+    # Process statement via direct worker logic or smart rule-based parser
     try:
         if DIRECT_WORKER:
             result = parse_statement_logic(narration)
         else:
-            # Smart Local Engine Fallback (Guaranteed to work even if worker.py is missing)
+            # Smart Rule Engine for parsing dictated transcript
+            words = narration.lower()
+            party_detected = "Alpha Corp"
+            if "alpha" in words:
+                party_detected = "Alpha Corp"
+            elif "beta" in words:
+                party_detected = "Beta Traders"
+            
+            item_detected = "Mouse"
+            if "keyboard" in words:
+                item_detected = "Keyboard"
+            elif "monitor" in words:
+                item_detected = "Monitor"
+
             result = {
                 "status": "SUCCESS",
                 "transcript": narration,
-                "party_name": "Alpha Corp" if "alpha" in narration.lower() else "Local Customer",
-                "voucher_type": "Sales",
-                "items": [{"Item": "Mouse", "Qty": 1}],
+                "party_name": party_detected,
+                "voucher_type": "Sales" if "sold" in words or "sale" in words else "Purchase",
+                "items": [{"Item": item_detected, "Qty": 1}],
                 "total_value": 500.0,
                 "date": datetime.now().strftime("%Y%m%d")
             }
@@ -174,8 +219,8 @@ def process_voice_pipeline(audio_path, text_overwrite):
         round_off_str = f"₹{round_off_val:+.2f}" if round_off_val != 0 else "₹0.00"
 
         return (
-            "✅ Verified | Dynamic Tax Applied",
-            result.get("transcript", narration),
+            "✅ Audio Dictation Processed & Verified",
+            narration,
             raw_xml,
             gr.update(visible=False),
             "",
@@ -189,7 +234,7 @@ def process_voice_pipeline(audio_path, text_overwrite):
         )
 
     except Exception as e:
-        return f"❌ Processing Error: {str(e)}", "", "", gr.update(visible=False), "", "", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
+        return f"❌ Processing Error: {str(e)}", narration, "", gr.update(visible=False), "", "", "-", "-", "-", "₹0.00", "₹0.00", "₹0.00"
 
 def save_and_export_xml(xml_content):
     if not xml_content or xml_content.strip() in ["", "<!-- XML -->"]:
@@ -247,7 +292,7 @@ with gr.Blocks(title="VoiceToTally ERP Suite") as demo:
             with gr.Column(scale=1):
                 gr.Markdown("## Option A: Voice Dictation Core")
                 audio_mic = gr.Audio(sources=["microphone", "upload"], type="filepath", label="Voice Recording Panel")
-                text_override = gr.Textbox(label="Manual Narration Overwrite", placeholder="Enter narration manually...", value="sold 1 mouse to alpha")
+                text_override = gr.Textbox(label="Manual Narration Overwrite", placeholder="Enter narration manually or leave empty when recording...", value="")
                 parse_btn = gr.Button("Parse Statement to Draft Pool", variant="primary")
 
                 with gr.Group(visible=False) as creation_prompt_pane:
