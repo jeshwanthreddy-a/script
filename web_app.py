@@ -25,6 +25,12 @@ NUMBER_WORDS = {
     "a": 1, "an": 1, "single": 1
 }
 
+COMMON_VERBS_OR_STOPWORDS = {
+    "sold", "sell", "bought", "buy", "sales", "purchase", "for", "to", "from", 
+    "rupees", "rs", "inr", "each", "per", "piece", "nos", "pcs", "units", "items",
+    "and", "with", "at", "rate", "of", "the", "a", "an", "on", "in"
+}
+
 def load_csv_data(file_path, default_cols):
     """Safely load CSV, ensuring required columns always exist."""
     if os.path.exists(file_path):
@@ -82,12 +88,12 @@ def get_item_tax_info(item_name):
     return "HSN-8504", 0.18, 0.0
 
 def extract_dynamic_entities(transcript):
-    """Dynamic regex & string analyzer to extract Party, Item, Qty, and Price/Rate from free text."""
+    """Dynamic regex & string analyzer with strict Master verification and alert triggers."""
     text = transcript.lower()
     
     # 1. Extract Quantity
     qty = 1
-    qty_pattern = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:nos|pcs|pieces|units|items|mouse|keyboards|monitors)?'
+    qty_pattern = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:nos|pcs|pieces|units|items)?'
     qty_match = re.search(qty_pattern, text)
     if qty_match:
         val = qty_match.group(1)
@@ -112,35 +118,59 @@ def extract_dynamic_entities(transcript):
             extracted_val = float(match.group(1))
             break
 
-    # 3. Dynamic Party Detection against LEDGER_CSV
+    # 3. Check Party Ledger against Master Database
     ledger_df = load_csv_data(LEDGER_CSV, ["Party Account Name", "Region State", "Classification Type"])
-    detected_party = "Cash"
-    for name in ledger_df["Party Account Name"].dropna().unique():
-        if str(name).lower() in text:
-            detected_party = str(name)
+    known_parties = [str(name).strip() for name in ledger_df["Party Account Name"].dropna().unique()]
+    
+    detected_party = None
+    for name in known_parties:
+        if name.lower() in text:
+            detected_party = name
             break
-            
-    if detected_party == "Cash":
-        if "alpha" in text:
+
+    # Check for hardcoded cash/common aliases
+    if not detected_party:
+        if "cash" in text:
+            detected_party = "Cash"
+        elif "alpha" in text and any(p.lower() == "alpha corp" for p in known_parties):
             detected_party = "Alpha Corp"
-        elif "beta" in text:
+        elif "beta" in text and any(p.lower() == "beta traders" for p in known_parties):
             detected_party = "Beta Traders"
 
-    # 4. Dynamic Item Detection against INVENTORY_CSV
+    # If party remains unknown, find candidate token after "to" / "from" / "for" to trigger Ledger Registration Pane
+    if not detected_party:
+        party_match = re.search(r'(?:to|from|for|party)\s+([a-zA-Z0-9]+)', text)
+        missing_party = party_match.group(1).capitalize() if party_match else "Unknown Party"
+        # Ignore if candidate token is a verb/stopword
+        if missing_party.lower() not in COMMON_VERBS_OR_STOPWORDS:
+            return {
+                "status": "LEDGER_NOT_FOUND",
+                "missing_party": missing_party,
+                "transcript": transcript
+            }
+        detected_party = "Cash"
+
+    # 4. Check Inventory Item against Master Database
     inv_df = load_csv_data(INVENTORY_CSV, ["SKU", "Item_Name", "HSN_Code", "Gst_Rate", "Unit_Price"])
-    detected_item = "General Goods"
-    for item in inv_df["Item_Name"].dropna().unique():
-        if str(item).lower() in text:
-            detected_item = str(item)
+    known_items = [str(item).strip() for item in inv_df["Item_Name"].dropna().unique()]
+    
+    detected_item = None
+    for item in known_items:
+        if item.lower() in text:
+            detected_item = item
             break
-            
-    if detected_item == "General Goods":
-        if "mouse" in text:
-            detected_item = "Mouse"
-        elif "keyboard" in text:
-            detected_item = "Keyboard"
-        elif "monitor" in text:
-            detected_item = "Monitor"
+
+    # If item remains unknown, extract candidate token between quantity and "to/for/for" to trigger Item Registration Pane
+    if not detected_item:
+        item_match = re.search(r'(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+([a-zA-Z0-9]+)', text)
+        missing_item = item_match.group(1).capitalize() if item_match else "Unknown Item"
+        if missing_item.lower() not in COMMON_VERBS_OR_STOPWORDS:
+            return {
+                "status": "ITEM_NOT_FOUND",
+                "missing_keyword": missing_item,
+                "transcript": transcript
+            }
+        detected_item = "General Goods"
 
     # 5. Calculate Final Subtotal Value
     hsn, tax_rate, master_unit_price = get_item_tax_info(detected_item)
@@ -396,7 +426,7 @@ with gr.Blocks(title="VoiceToTally ERP Suite") as demo:
                 with gr.Group(visible=False) as creation_prompt_pane:
                     gr.Markdown("### 🛠️ Interactive Register Sync")
                     missing_identity = gr.Textbox(label="Missing Account / Inventory Identity")
-                    identity_type = gr.Dropdown(choices=["Sundry Debtors", "Sundry Creditors", "Inventory Item"], label="Master Type")
+                    identity_type = gr.Dropdown(choices=["Inventory Item", "Sundry Debtors", "Sundry Creditors"], label="Master Type")
                     forge_btn = gr.Button("Register Master Data (1-Click)", variant="stop")
 
             with gr.Column(scale=1):
